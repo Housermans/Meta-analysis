@@ -1,0 +1,45 @@
+# Ignore all .log files
+*.log
+
+# Ignore the build directory
+/build/
+/Archive/
+
+# Ignore all files in the temp directory
+temp/*
+
+# But don't ignore this specific file
+!temp/keep_this.txt
+
+# Ignore all .tmp files
+*.tmp
+
+# Ignore OS generated files
+.DS_Store
+Thumbs.db
+
+# Ignore R specific files
+.Rhistory
+.RData
+
+# Ignore Python specific files
+__pycache__/
+*.py[cod]
+*.so
+
+# Ignore common IDE/editor files
+.vscode/
+.idea/
+*.swp
+*~
+
+# Ignore output files
+*.csv
+*.xlsx
+*.png
+*.docx
+
+# Ignore sensitive or environment-specific files
+config.ini
+secrets.yaml
+.env
