@@ -138,7 +138,7 @@ create_forestplot(db, "N_pat_GR3", "N_pat_safety", "pat_gr3")
 create_forestplot(db, "N_pat_GR3", "N_pat_safety", "pat_gr3_phase1", phase = 1)
 create_forestplot(db, "N_pat_GR3", "N_pat_safety", "pat_gr3_phase2", phase = 2)
 
-create_summary_forestplot <- function(data, events_col, n_col,  plot_name, plot_title, category, phase = NULL, Width = 1700, plot_complete = FALSE, use_prediction_intervals = FALSE) {
+create_summary_forestplot <- function(data, events_col, n_col,  plot_name, plot_title, category, phase = NULL, Width = 1700, plot_complete = TRUE, use_prediction_intervals = FALSE) {
   #data <- db
   #events_col <- "events_ORR"
   #n_col <- "N_eval_eff_total"
