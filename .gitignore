@@ -38,6 +38,7 @@ __pycache__/
 *.png
 *.docx
 *.pdf
+**/*.pdf
 
 # Ignore sensitive or environment-specific files
 config.ini
