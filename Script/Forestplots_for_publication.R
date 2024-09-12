@@ -1,3 +1,26 @@
+# Forestplots_for_publication.R
+#
+# This script generates forest plots for a meta-analysis of clinical trials
+# in metastatic colorectal cancer. It analyzes efficacy and safety outcomes
+# across different trial phases, drug types, and other subgroups.
+#
+# Last updated: 12-09-2024
+# Authors: M.A. Huismans and L.P. Smabers
+#
+# Package versions used in this script:
+# metadat: 1.2.0
+# meta: 7.0.0
+# readxl: 1.4.3
+# dplyr: 1.1.4
+# metafor: 4.6.0
+# ggplot2: 3.5.1
+# ggpubr: 0.6.0
+# cowplot: 1.1.3
+# grid: 4.4.0
+# patchwork: 1.2.0
+# stringr: 1.5.1
+# tidyr: 1.3.1
+
 #load packages
 library(metadat)
 library(meta)
@@ -12,118 +35,133 @@ library(patchwork)
 library(stringr)
 library(tidyr)
 
+# Clear workspace
 rm(list=ls())
+
+# Set up directories
 script_dir <- dirname(rstudioapi::getSourceEditorContext()$path)
-# script.dir <- dirname(sys.frame(1)$ofile) 
 home_dir <- dirname(script_dir)
 input <- file.path(home_dir, "Input")
-output <- file.path(home_dir, "Output")
 plot_dir <- file.path(home_dir, "Plots")
 plot_dir_sum <- file.path(plot_dir, "summary")
 plot_dir_com <- file.path(plot_dir, "complete")
 
-db <- read_excel(file.path(output, "filtered_db_231106.xlsx"))
+# Load data
+db <- read_excel(file.path(input, "filtered_database.xlsx"))
 
-#variable for number evaluable patients (CRC or all cancer types)
-db$N_eval_eff_total <- ifelse(db$CRC_specific == "1", db$N_eva_eff_crc, 
-                          ifelse(db$CRC_specific == "0", db$N_eva_eff, NA))
-
-db <- db %>% filter(!is.na(db$N_eval_eff_total))
-
+# Data Preparation ----
+# Create variable for number of evaluable patients (CRC or all cancer types)
 db <- db %>%
-  mutate(PS_0_1 = PS_0 + PS_1,
-         PS_ratio = PS_2/ (PS_2+PS_0_1))
+  mutate(N_eval_eff_total = case_when(
+    CRC_specific == "1" ~ N_eva_eff_crc,
+    CRC_specific == "0" ~ N_eva_eff,
+    TRUE ~ NA_real_
+  )) %>%
+  filter(!is.na(N_eval_eff_total))
 
-db$Med_age_cat <- cut(
-  as.numeric(db$Med_age),
-  breaks = c(0, 55, 60, 65, Inf),
-  labels = c("<55", "56-60","61-65", ">65"),
-  include.lowest = TRUE
-) # make age categories based on verdeling
+# Calculate performance status ratios
+db <- db %>%
+  mutate(
+    PS_0_1 = PS_0 + PS_1,
+    PS_ratio = PS_2 / (PS_2 + PS_0_1)
+  )
 
-db$N_pat_GR3 <- db$`N_pat_GR3+` # om te zorgen dat je deze variabele makkelijker kan aanroepen
-db$N_events_GR3 <- db$`N_events_Gr3+` # om te zorgen dat je deze variabele makkelijker kan aanroepen
-db$N_events_top5_GR3 <- db$`N_events_top5_Gr3+` # om te zorgen dat je deze variabele makkelijker kan aanroepen
+# Create age categories
+db <- db %>%
+  mutate(Med_age_cat = cut(
+    as.numeric(Med_age),
+    breaks = c(0, 55, 60, 65, Inf),
+    labels = c("<55", "56-60", "61-65", ">65"),
+    include.lowest = TRUE
+  ))
 
+# Rename safety variables for easier access
+db <- db %>%
+  rename(
+    N_pat_GR3 = `N_pat_GR3+`,
+    N_events_GR3 = `N_events_Gr3+`,
+    N_events_top5_GR3 = `N_events_top5_Gr3+`
+  )
 
-# Eigen dataset --------------------------
-# db$N_total_check <- db$N_PD + db$N_SD_short + db$N_PR+ db$N_CR
-# db_N_check <- db$N_total_check == db$N_eval_eff_total
-# db_N_check <- cbind(db$Aut_1, db$Year_published_online, db_N_check) # check N totaal = PD + SD + PR + CR
-# #db_N_check_false <- db_N_check %>% filter(db_N_check == FALSE)
+# Calculate efficacy outcomes
+db <- db %>%
+  mutate(
+    events_CBR = N_SD_14 + N_PR + N_CR,
+    events_ORR = N_PR + N_CR,
+    events_CBR_MSI = SD14_MSI + PR_MSI + CR_MSI,
+    events_CBR_MSS = SD14_MSS + PR_MSS + CR_MSS,
+    events_ORR_MSI = PR_MSI + CR_MSI,
+    events_ORR_MSS = PR_MSS + CR_MSS,
+    events_n_eva_MSI = n_eva_MSI,
+    events_n_eva_MSS = n_eva_MSS
+  )
 
-# db$N_SD_shortlong <- ifelse(is.na(db$N_SD_short), db$N_SD_long, db$N_SD_short)
-db$events_CBR <- db$N_SD_14 + db$N_PR + db$N_CR
-db$events_ORR <- db$N_PR + db$N_CR
-db$events_CBR_MSI <- db$SD14_MSI + db$PR_MSI + db$CR_MSI
-db$events_CBR_MSS <- db$SD14_MSS + db$PR_MSS + db$CR_MSS
-db$events_ORR_MSI <- db$PR_MSI + db$CR_MSI
-db$events_ORR_MSS <- db$PR_MSS + db$CR_MSS
-db$events_n_eva_MSI <- db$n_eva_MSI
-db$events_n_eva_MSS <- db$n_eva_MSS
-db_MS <-selected_columns <- db[c("Aut_1", "Journal", "events_CBR_MSI", "events_CBR_MSS", "events_ORR_MSI", "events_ORR_MSS","events_n_eva_MSS", "events_n_eva_MSI")]
-db_MS <- db_MS %>%
+# Prepare MSI/MSS data
+db_MS <- db %>%
+  dplyr::select(Aut_1, Journal, starts_with("events_")) %>%
   filter(!is.na(events_CBR_MSS))
-
 
 long_MS <- db_MS %>%
   pivot_longer(
     cols = starts_with("events_"),
     names_to = c(".value", "MSS_MSI"),
     names_pattern = "events_(CBR|ORR|n_eva)_(MSS|MSI)"
-  )
-long_MS <- long_MS %>%
-  filter(n_eva  != 0)
+  ) %>%
+  filter(n_eva != 0)
 
-#categories voorbehandeling
-db$Med_lines <- as.numeric(db$Med_lines)
-#mean(db$Med_lines, na.rm = TRUE)  #3.5 mean   
-db$Med_lines_35 <- ifelse(db$Med_lines <3.5, "< 3.5", ">= 3.5")
-
-#categories PS 
-db$PS_ratio10 <- ifelse(db$PS_ratio <0.1, "< 20% PS 2", ">= 10% PS 2")
-db$PS_ratio010 <- ifelse(db$PS_ratio == 0, "No PS 2",
-                        ifelse(db$PS_ratio > 0 & db$PS_ratio < 0.1, "0-10% PS 2", ">10% PS 2"))
-
-#categories median age
-# db_med_age_cat <- db_events_CBR %>% filter(!is.na(db_events_CBR$Med_age_cat))
-
-db$Targeted <- ifelse(db$Cohort_target == "Not targeted", "Not targeted", "Targeted")
-
-# Categories for fun:
-journal_counts <- table(db$Journal)
-top_10_journals <- names(sort(journal_counts, decreasing=TRUE)[1:10])
-top_10_journals_db <- db %>% filter(Journal %in% top_10_journals)
-
-#MSI analysis
-db$ratio_MSI <- db$n_eva_MSI/(db$n_eva_MSI+db$n_eva_MSS)
-db$MSI_20 <- ifelse(db$ratio_MSI < 0.2, "< 20% MSI", ">= 20% MSI")
-
+# Create additional categories
 db <- db %>%
-  mutate(studlab = paste0(Aut_1, ", ", Year_published_online))
+  mutate(
+    Med_lines_35 = if_else(Med_lines < 3.5, "< 3.5", ">= 3.5"),
+    PS_ratio10 = if_else(PS_ratio < 0.1, "< 20% PS 2", ">= 10% PS 2"),
+    PS_ratio010 = case_when(
+      PS_ratio == 0 ~ "No PS 2",
+      PS_ratio > 0 & PS_ratio < 0.1 ~ "0-10% PS 2",
+      PS_ratio >= 0.1 ~ ">10% PS 2"
+    ),
+    Targeted = if_else(Cohort_target == "Not targeted", "Not targeted", "Targeted"),
+    ratio_MSI = n_eva_MSI / (n_eva_MSI + n_eva_MSS),
+    MSI_20 = if_else(ratio_MSI < 0.2, "< 20% MSI", ">= 20% MSI"),
+    studlab = paste0(Aut_1, ", ", Year_published_online)
+  )
 
 #plots----------------------
-create_forestplot <- function(data, events_col, n_col,  plot_name,  phase = NULL) {
+# Function to create basic forest plots
+create_forestplot <- function(data, events_col, n_col, plot_name, phase = NULL) {
   # Filter by phase if specified
   if (!is.null(phase)) {
     data <- data %>% filter(Phase == phase)
   }
   
-  # Filter out missing values for specified columns and sort in alphabetic order
+  # Prepare data for meta-analysis
   data <- data %>% 
-    filter(!is.na(data[[events_col]]) & !is.na(data[[n_col]]))
-  data <- arrange(data, Aut_1) # zet de db op alfabetische volgorde
+    filter(!is.na(!!sym(events_col)) & !is.na(!!sym(n_col))) %>%
+    arrange(Aut_1)
   
+  # Perform meta-analysis
+  plot_result <- metaprop(
+    event = data[[events_col]], 
+    n = data[[n_col]], 
+    studlab = data[["studlab"]], 
+    sm = "PLOGIT", 
+    comb.fixed = FALSE, 
+    comb.random = TRUE, 
+    method = "Inverse", 
+    control = list(stepadj = 0.5)
+  )
   
-  plot_result <- metaprop(data[[events_col]], data[[n_col]], data[["studlab"]], 
-                          sm = "PLOGIT", 
-                          comb.fixed = FALSE, 
-                          comb.random = TRUE, 
-                          method = "Inverse", 
-                          control = list(stepadj = 0.5))
+  # Generate forest plot
   forest_result <- forest(plot_result)
-  plot_height = 100 + length(forest_result$studlab) * 20 # past hoogte van plot aan aan het aantal studies in de categorie
-  rstudioapi::savePlotAsImage(file.path(plot_dir, paste0(plot_name, ".png")), width = 850, height = plot_height)
+  
+  # Calculate plot dimensions
+  plot_height <- 100 + length(forest_result$studlab) * 20
+  
+  # Save plot
+  rstudioapi::savePlotAsImage(
+    file.path(plot_dir, paste0(plot_name, ".png")), 
+    width = 850, 
+    height = plot_height
+  )
 }
 
 # Simpele forestplots
@@ -138,93 +176,9 @@ create_forestplot(db, "N_pat_GR3", "N_pat_safety", "pat_gr3")
 create_forestplot(db, "N_pat_GR3", "N_pat_safety", "pat_gr3_phase1", phase = 1)
 create_forestplot(db, "N_pat_GR3", "N_pat_safety", "pat_gr3_phase2", phase = 2)
 
-create_summary_forestplot <- function(data, events_col, n_col,  plot_name, plot_title, category, phase = NULL, Width = 1700, plot_complete = TRUE, use_prediction_intervals = FALSE) {
-  #data <- db
-  #events_col <- "events_ORR"
-  #n_col <- "N_eval_eff_total"
-  #plot_name <-"ORR_drugtype_p1"
-  #plot_title <- "ORR by tested compound category"
-  #category <-  "DrugType"
-  #phase <-1 
-  #Width <- 1700
-  #plot_complete <- FALSE
-  #use_prediction_intervals<- FALSE
-  
-  if (!is.null(phase)) {
-    data <- data %>% filter(Phase == phase)
-    plot_title <- paste(plot_title, "for phase", phase, "trials") 
-  }
-  
-  # Filter out missing values for specified columns and sort in alphabetic order
-  data <- data %>% 
-    filter(!is.na(data[[events_col]]) & !is.na(data[[n_col]]) & !is.na(data[[category]]))
-  
-  # Calculate the number of studies in each category
-  n_category <- length(unique(data[[category]]))
-  n_studies <- data %>% group_by(data[[category]]) %>% summarise(n_studies = n()) 
-  n_studies <- n_studies %>% rename(category = "data[[category]]")
-  
-  plot_result <- metaprop(data[[events_col]], data[[n_col]], data[["studlab"]], 
-                          byvar = data[[category]],
-                          sm = gs("smprop"), 
-                          comb.fixed = FALSE, 
-                          comb.random = TRUE, 
-                          method = "Inverse", 
-                          control = list(maxiter = 1000, tol = 1e-06, stepadj = 0.2, verbose = FALSE), #eerder hier alleen stepadj = 0.5, maar dat gaf @23-10-2023 problemen die er eerder niet waren. Daarom nu aangepast
-                          method.tau = "DL",
-                          test.subgroup.random = TRUE)
-
-  plot_result_overall_esimate <-  metaprop(data[[events_col]], data[[n_col]], data[["studlab"]], 
-                                           sm = gs("smprop"), 
-                                           comb.fixed = FALSE, 
-                                           comb.random = TRUE, 
-                                           method = "Inverse", 
-                                           control = list(maxiter = 1000, tol = 1e-06, stepadj = 0.2, verbose = FALSE), #eerder hier alleen stepadj = 0.5, maar dat gaf @23-10-2023 problemen die er eerder niet waren. Daarom nu aangepast
-                                           method.tau = "DL",
-                                           test.subgroup.random = TRUE)
-  Estimate_overall <-transf.ilogit(as.numeric(plot_result_overall_esimate$TE.random))
-  CI_overall_lower<-transf.ilogit(as.numeric(plot_result_overall_esimate$lower.random))
-  CI_overall_upper<-transf.ilogit(as.numeric(plot_result_overall_esimate$upper.random))
-  pred_overall_lower<-transf.ilogit(as.numeric(plot_result_overall_esimate$lower.predict))
-  pred_overall_upper<-transf.ilogit(as.numeric(plot_result_overall_esimate$upper.predict))
-  
-  forest_result <- forest(plot_result)
-  plot_height = 100 + length(forest_result$studlab) * 20 + n_category * 80 # past hoogte van plot aan aan het aantal studies in de categorie
-  
-  if (plot_complete == TRUE) {
-      rstudioapi::savePlotAsImage(file.path(plot_dir_com, paste0(plot_name, "_all.png")), width = 850, height = plot_height)
-  }
-  
-  
-  Estimate<-transf.ilogit(plot_result$TE.random.w) #back transformation logit
-  if (use_prediction_intervals) {
-    Upper <- transf.ilogit(plot_result$upper.predict.w)
-    Lower <- transf.ilogit(plot_result$lower.predict.w)
-  } else {
-    Upper <- transf.ilogit(plot_result$upper.random.w)
-    Lower <- transf.ilogit(plot_result$lower.random.w)
-  }
-  
-  df_estimate <- as.data.frame(Estimate)
-  df_upper <- as.data.frame(Upper)
-  df_lower <- as.data.frame(Lower)
-  
-  df_estimate$category <- row.names(df_estimate)
-  df_upper$category <- row.names(df_upper)
-  df_lower$category <- row.names(df_lower)
-  
-  merge1 <- merge(df_estimate, df_upper)
-  merge2 <- merge(merge1, df_lower)
-  merge2$index <- 1:n_category
-  merge2
-  merge3 <- merge(merge2, n_studies)
-  merge4 <- merge3 %>% arrange(index)
-  
-  merge5 <- rbind(merge4, c(category = "Overall", Estimate_overall, CI_overall_upper, CI_overall_lower, index = n_category + 1, n_studies = sum(merge4$n_studies)))
-  merge <- rbind(merge5, c(category = "Prediction interval", Estimate_overall = NA, pred_overall_upper, pred_overall_lower, index = n_category + 2, n_studies = NA))
-  merge[, -1] <- apply(merge[, -1], 2, as.numeric)
-
-  cat_n <- ggplot(data = merge) +
+# Function to generate category plot
+generate_category_plot <- function(merge) {
+  ggplot(data = merge) +
     geom_text(aes(y = reorder(category, -index), x = 1, label = n_studies), vjust = 0) +
     geom_hline(yintercept = 11.6, linewidth = 2) +
     labs(title = '', x = 'N', y = 'Category') +
@@ -234,19 +188,22 @@ create_summary_forestplot <- function(data, events_col, n_col,  plot_name, plot_
     theme(
       axis.line.y = element_blank(),
       axis.line.x = element_line(color = "white"),
-      # axis.text.y = element_blank(),
       axis.ticks.y = element_blank(),
       axis.ticks.x = element_line(color = "white"),
       axis.ticks.length = unit(0.3, "cm"),
       axis.title.y = element_blank(),
       axis.text.x = element_text(color = "white"),
-      # plot.title = element_text(hjust = 0.5),
       plot.title = element_text(hjust = 0.5),
       axis.text.y = element_text(vjust = -.2, size = 11)
     )
- 
-  t1 <- ggplot(data = merge) +
-    geom_text(aes(y = reorder(category, -index), x = 1, label = ifelse(is.na(Estimate), "", sprintf("%0.1f", Estimate*100))), vjust = 0) +
+}
+
+# Function to generate estimate plot
+generate_estimate_plot <- function(merge) {
+  ggplot(data = merge) +
+    geom_text(aes(y = reorder(category, -index), x = 1, 
+                  label = ifelse(is.na(Estimate), "", sprintf("%0.1f", Estimate*100))), 
+              vjust = 0) +
     geom_hline(yintercept = 11.6, linewidth = 2) +
     ggtitle("Proportion") +
     xlab("  ") +
@@ -263,9 +220,14 @@ create_summary_forestplot <- function(data, events_col, n_col,  plot_name, plot_
       axis.text.x = element_text(color = "white"),
       plot.title = element_text(hjust = 0.5)
     )
-  
-  t2 <- ggplot(data = merge) +
-    geom_text(aes(y = reorder(category, -index), x = 1, label = sprintf("(%0.1f; %0.1f)", Lower*100, Upper*100)), vjust = 0) +
+}
+
+# Function to generate CI plot
+generate_ci_plot <- function(merge) {
+  ggplot(data = merge) +
+    geom_text(aes(y = reorder(category, -index), x = 1, 
+                  label = sprintf("(%0.1f; %0.1f)", Lower*100, Upper*100)), 
+              vjust = 0) +
     geom_hline(yintercept = 11.6, linewidth = 2) +
     ggtitle("95%-CI") +
     theme_classic(base_size = 9) +
@@ -282,36 +244,40 @@ create_summary_forestplot <- function(data, events_col, n_col,  plot_name, plot_
       axis.text.x = element_text(color = "white"),
       plot.title = element_text(hjust = 0.5)
     )
+}
+
+# Function to generate forest plot
+generate_forest_plot <- function(merge, events_col) {
+  if (events_col == "events_ORR") {
+    limits <- c(0, 40)
+    breaks <- c(0, 40)
+  } else if (events_col == "events_CBR") {
+    limits <- c(0, 100)
+    breaks <- c(0, 100)
+  } else if (events_col == "N_pat_GR3") {
+    limits <- c(0, 100)
+    breaks <- c(0, 100)
+  } else if (events_col == "N_Disc") {
+    limits <- c(0, 40)
+    breaks <- c(0, 40)
+  } else if (events_col == "N_DLT") {
+    limits <- c(0, 50)
+    breaks <- c(0, 50)
+  } else {
+    limits <- c(0, 100)  # Default limits
+    breaks <- c(0, 100)
+  }  
   
-   if (events_col == "events_ORR") {
-      limits <- c(0, 40)
-      breaks <- c(0, 40)
-    } else if (events_col == "events_CBR") {
-      limits <- c(0, 100)
-      breaks <- c(0, 100)
-    } else if (events_col == "N_pat_GR3") {
-      limits <- c(0, 100)
-      breaks <- c(0, 100)
-    } else if (events_col == "N_Disc") {
-      limits <- c(0, 40)
-      breaks <- c(0, 40)
-    } else if (events_col == "N_DLT") {
-      limits <- c(0, 50)
-      breaks <- c(0, 50)
-    } else {
-      limits <- c(0, 100)  # Default limits
-      breaks <- c(0, 100)
-    }  
- 
-  plot_category <- ggplot(data=merge, aes(y=-index, x=Estimate*100, xmin=Lower*100, xmax=Upper*100)) +
+  ggplot(data=merge, aes(y=-index, x=Estimate*100, xmin=Lower*100, xmax=Upper*100)) +
     labs(x = "Effect size (95%-CI)") +
     ggtitle("Effect size") +
     geom_point(shape = 22, fill = "grey", size = 3) + 
     geom_linerange(aes(xmin=Lower*100, xmax=Upper*100), size = 0.5)+
     scale_y_continuous(breaks=1:nrow(merge), labels=merge$category) +
-    #geom_vline(xintercept=Estimate_overall, color='black', linetype='dashed', alpha=.5) +
-    geom_rect(data=merge[nrow(merge), ], aes(xmin = pred_overall_lower*100, xmax = pred_overall_upper*100, ymin = -nrow(merge)-0.05, ymax = -nrow(merge)+0.05),
-              fill = "darkred", linetype = 0) +  # Add the prediction interval bar only in the last row
+    geom_rect(data=merge[nrow(merge), ], 
+              aes(xmin = Lower*100, xmax = Upper*100, 
+                  ymin = -nrow(merge)-0.05, ymax = -nrow(merge)+0.05),
+              fill = "darkred", linetype = 0) +
     theme_classic(base_size = 9) +
     theme(
       axis.line.y = element_blank(),
@@ -322,35 +288,67 @@ create_summary_forestplot <- function(data, events_col, n_col,  plot_name, plot_
       plot.margin = margin(7, 1, 19, 1, unit = "pt")   
     ) +
     scale_x_continuous(breaks = breaks, labels = breaks,  limits = limits)
+}
+
+# Function to generate subgroup annotation
+generate_subgroup_annotation <- function(plot_result) {
+  if (plot_result$pval.Q.b.random < 0.001) {
+    paste("Test for subgroup differences: p <", "0.001")
+  } else {
+    paste("Test for subgroup differences: p =", sprintf("%.3f", plot_result$pval.Q.b.random))
+  }
+}
+
+create_summary_forestplot <- function(data, events_col, n_col, plot_name, plot_title, category, 
+                                      phase = NULL, Width = 1700, plot_complete = TRUE, 
+                                      use_prediction_intervals = FALSE) {
+  # Prepare data
+  prep_data <- prepare_summary_data(data, events_col, n_col, category, phase)
   
+  # Perform meta-analysis
+  plot_result <- perform_summary_meta_analysis(prep_data$data, events_col, n_col, category)
   
-  annotation_text <- textGrob("Test for subgroup differences: p", hjust = 0, vjust = 1, gp = gpar(fontsize = 10))
+  # Prepare plot data
+  merge <- prepare_plot_data(plot_result, prep_data$n_studies, use_prediction_intervals)
   
-  plot <- plot_grid(
+  # Generate individual plot components
+  cat_n <- generate_category_plot(merge)
+  t1 <- generate_estimate_plot(merge)
+  t2 <- generate_ci_plot(merge)
+  plot_category <- generate_forest_plot(merge, events_col)
+  
+  # Combine plots
+  combined_plot <- plot_grid(
     cat_n, t1, t2, plot_category,
     nrow = 1,
     rel_heights = c(1),
     rel_widths = c(((((max(stringr::str_width(unique(merge$category))))/20)+0.50)*4), 2.5, 3, 6)
   ) +
-    plot_annotation(title = plot_title, theme = theme(plot.title = element_text(hjust = 0.5, size = 11)))
+    plot_annotation(
+      title = plot_title, 
+      theme = theme(plot.title = element_text(hjust = 0.5, size = 11))
+    )
   
-  if (plot_result$pval.Q.b.random < 0.001) {
-    annotation_text <- paste("Test for subgroup differences: p <", "0.001")
-  } else {
-    annotation_text <- paste("Test for subgroup differences: p =", sprintf("%.3f", plot_result$pval.Q.b.random))
+  # Add annotation for subgroup differences
+  annotation_text <- generate_subgroup_annotation(plot_result)
+  final_plot <- combined_plot + 
+    annotation_custom(grob = textGrob(annotation_text, gp = gpar(fontsize = 9)), 
+                      ymin = 0, ymax = 0, xmin = -Inf, xmax = Inf)
+  
+  # Save plot
+  Height <- 300 + (prep_data$n_category + 2) * 100
+  Width <- 1150 + max(((stringr::str_width(unique(merge$category)))/20)+0.55)*410
+  ggsave(file.path(plot_dir_sum, paste0(plot_name, "_summary.pdf")), 
+         plot = final_plot, width = Width, height = Height, units = "px")
+  
+  # Save complete plot if requested
+  if (plot_complete) {
+    forest_result <- forest(plot_result)
+    plot_height <- 100 + length(forest_result$studlab) * 20 + prep_data$n_category * 80
+    rstudioapi::savePlotAsImage(file.path(plot_dir_com, paste0(plot_name, "_all.png")), 
+                                width = 850, height = plot_height)
   }
-  annotation_text
-  annotation <- textGrob(annotation_text, gp = gpar(fontsize = 9))
-  
-  plot <- plot + 
-    annotation_custom(grob = annotation, ymin = 0, ymax = 0, xmin = -Inf, xmax = Inf)
-plot
-  Height =  300 + (n_category+2) * 100
-  Width =  1150 + max(((stringr::str_width(unique(merge$category)))/20)+0.55)*410
-            
-  ggsave(file.path(plot_dir_sum, paste0(plot_name, "_summary.pdf")), plot=plot, width=Width, height=Height, units="px")
- 
-}  
+}
 
 #ORR
 create_summary_forestplot(db, "events_ORR", "N_eval_eff_total", plot_name = "ORR_year", plot_title = "ORR by year", category="year_group")
@@ -858,11 +856,6 @@ create_summary_forestplot_preselected <- function(data, events_col, n_col,  plot
 
 create_summary_forestplot_preselected(db, "events_ORR", "N_eval_eff_total", plot_name = "ORR_drugtype", plot_title = "ORR by tested compound category and if trial population was preselected", category="DrugType")
 create_summary_forestplot_preselected(db, "events_CBR", "N_eval_eff_total", plot_name = "CBR_drugtype", plot_title = "CBR by tested compound category and if trial population was preselected", category="DrugType")
-
-
-
-
-
 
 create_summary_forestplot(db, "N_DLT", "N_pat_safety", plot_name = "DLT_all_safety_drugtype_p1", plot_title = "Patients with a DLT by tested compound category", category="DrugType", phase = 1, plot_complete = TRUE)
 db_p1 <- db %>% filter(Phase == 1)
